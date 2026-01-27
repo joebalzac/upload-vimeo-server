@@ -17,27 +17,27 @@ const ALLOWED_ORIGINS = new Set<string>([
   "http://localhost:5173",
 ]);
 
-// temporary debug — do NOT commit to client-side code or keep long-term
-console.log("ENV debug -- VIMEO_TOKEN present:", !!process.env.VIMEO_TOKEN);
-console.log(
-  "ENV debug -- VIMEO_FOLDER_ID present:",
-  !!process.env.VIMEO_FOLDER_ID,
-);
-
-// optional: log lengths only (still be careful with logs retention)
-console.log(
-  "ENV debug -- VIMEO_TOKEN length:",
-  process.env.VIMEO_TOKEN ? process.env.VIMEO_TOKEN.length : 0,
-);
-
 function setCors(req: NextApiRequest, res: NextApiResponse) {
-  const origin = req.headers.origin || "";
+  const origin = (req.headers.origin || "") as string;
+
+  // If origin is present and allowed, echo it back.
   if (origin && ALLOWED_ORIGINS.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
+  } else if (!origin) {
+    // No origin (likely server-to-server); allow by default for server requests.
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  } else {
+    // Origin present but not in allowlist — do not set ACAO (will block browser requests).
+    console.warn("[CORS] Request origin not in ALLOWED_ORIGINS:", origin);
+    // For visibility while debugging, also include a header that we can inspect in logs.
+    res.setHeader("X-Debug-Blocked-Origin", origin);
   }
+
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  // Expose any headers you later want the browser to read
+  res.setHeader("Access-Control-Expose-Headers", "X-Debug-Blocked-Origin");
 }
 
 function vimeoHeaders() {
@@ -62,6 +62,21 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
+  // Per-request debug log (will appear in Vercel function logs)
+  console.log("[DEBUG] /api/vimeo/create-upload incoming", {
+    time: new Date().toISOString(),
+    method: req.method,
+    origin: req.headers.origin,
+    url: req.url,
+  });
+
+  // For extra visibility: log whether env vars exist (masked)
+  console.log("[DEBUG] env presence", {
+    VIMEO_TOKEN_present: !!VIMEO_TOKEN,
+    VIMEO_FOLDER_ID_present: !!VIMEO_FOLDER_ID,
+    // don't log the token contents
+  });
+
   // ✅ CORS for browser-based frontends (Webflow/React)
   setCors(req, res);
 
@@ -77,6 +92,7 @@ export default async function handler(
 
   // ✅ Env var sanity
   if (!VIMEO_TOKEN || !VIMEO_FOLDER_ID) {
+    console.error("[ERROR] Missing env vars VIMEO_TOKEN or VIMEO_FOLDER_ID");
     return res.status(500).json({
       error: "Server not configured",
       details:
@@ -96,10 +112,6 @@ export default async function handler(
       return res.status(400).json({ error: "Missing/invalid size" });
     }
 
-    // Optional guardrails (you can tune/remove)
-    // const MAX_BYTES = 100 * 1024 * 1024; // 100MB
-    // if (size > MAX_BYTES) return res.status(400).json({ error: "File too large" });
-
     // 1) Create Vimeo video placeholder with tus upload
     const createResp = await fetch("https://api.vimeo.com/me/videos", {
       method: "POST",
@@ -113,17 +125,26 @@ export default async function handler(
 
     if (!createResp.ok) {
       const text = await createResp.text();
+      console.error("[ERROR] Vimeo create failed:", createResp.status, text);
       return res
         .status(createResp.status)
         .json({ error: "Failed to create Vimeo upload", details: text });
     }
 
     const created: any = await createResp.json();
+    // Log the important parts of the Vimeo response for debugging (avoid huge dumps)
+    console.log("[DEBUG] Vimeo create response keys:", Object.keys(created));
+
     const uploadLink: string | undefined = created?.upload?.upload_link;
     const videoUri: string | undefined = created?.uri; // e.g. "/videos/123"
     const videoId = (videoUri || "").split("/").pop();
 
     if (!uploadLink || !videoUri || !videoId) {
+      console.error("[ERROR] Vimeo response missing fields", {
+        uploadLink: !!uploadLink,
+        videoUri: !!videoUri,
+        videoId: !!videoId,
+      });
       return res.status(500).json({
         error: "Vimeo response missing upload_link/video id",
         details: JSON.stringify({
@@ -150,6 +171,7 @@ export default async function handler(
     // For your flow, storing video_id + video_uri is the reliable identifier.
     const videoUrl = `https://vimeo.com/${videoId}`;
 
+    // Return the upload link and metadata to the frontend
     return res.status(200).json({
       upload_link: uploadLink,
       video_id: videoId,
@@ -159,6 +181,7 @@ export default async function handler(
       privacy: DEFAULT_PRIVACY,
     });
   } catch (e: any) {
+    console.error("[ERROR] handler caught", e);
     return res.status(500).json({
       error: "Server error",
       details: String(e?.message || e),
