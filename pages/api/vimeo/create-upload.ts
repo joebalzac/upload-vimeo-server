@@ -17,6 +17,19 @@ const ALLOWED_ORIGINS = new Set<string>([
   "http://localhost:5173",
 ]);
 
+// temporary debug — do NOT commit to client-side code or keep long-term
+console.log("ENV debug -- VIMEO_TOKEN present:", !!process.env.VIMEO_TOKEN);
+console.log(
+  "ENV debug -- VIMEO_FOLDER_ID present:",
+  !!process.env.VIMEO_FOLDER_ID,
+);
+
+// optional: log lengths only (still be careful with logs retention)
+console.log(
+  "ENV debug -- VIMEO_TOKEN length:",
+  process.env.VIMEO_TOKEN ? process.env.VIMEO_TOKEN.length : 0,
+);
+
 function setCors(req: NextApiRequest, res: NextApiResponse) {
   const origin = req.headers.origin || "";
   if (origin && ALLOWED_ORIGINS.has(origin)) {
@@ -66,7 +79,8 @@ export default async function handler(
   if (!VIMEO_TOKEN || !VIMEO_FOLDER_ID) {
     return res.status(500).json({
       error: "Server not configured",
-      details: "Missing VIMEO_TOKEN or VIMEO_FOLDER_ID in environment variables",
+      details:
+        "Missing VIMEO_TOKEN or VIMEO_FOLDER_ID in environment variables",
     });
   }
 
@@ -112,7 +126,11 @@ export default async function handler(
     if (!uploadLink || !videoUri || !videoId) {
       return res.status(500).json({
         error: "Vimeo response missing upload_link/video id",
-        details: JSON.stringify({ uploadLink: !!uploadLink, videoUri: !!videoUri, videoId: !!videoId }),
+        details: JSON.stringify({
+          uploadLink: !!uploadLink,
+          videoUri: !!videoUri,
+          videoId: !!videoId,
+        }),
       });
     }
 
