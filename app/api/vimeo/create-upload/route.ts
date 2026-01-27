@@ -65,7 +65,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing/invalid size" }, { status: 400, headers });
   }
 
-  // 1) Create Vimeo video placeholder with tus upload
+  // 1. Create Vimeo video placeholder with tus upload
   const createResp = await fetch("https://api.vimeo.com/me/videos", {
     method: "POST",
     headers: {
@@ -107,7 +107,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // 2) Best-effort: add video to folder (do not block upload if it fails)
+  // 2. Best-effort: add video to folder (do not block upload if it fails)
   const addToFolderResp = await fetch(
     `https://api.vimeo.com/me/folders/${VIMEO_FOLDER_ID}/videos/${videoId}`,
     {
