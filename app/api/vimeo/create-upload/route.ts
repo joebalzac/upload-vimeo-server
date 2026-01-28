@@ -5,8 +5,8 @@ const VIMEO_FOLDER_ID = process.env.VIMEO_FOLDER_ID || "";
 const DEFAULT_PRIVACY = process.env.VIMEO_DEFAULT_PRIVACY || "unlisted";
 
 const ALLOWED_ORIGINS = new Set<string>([
-  "https://eliseai.com",
-  "https://elise-ai-v3-7ffb9f5ea1acd5af317df8c7a1e.webflow.io",
+  "https://eliseai.com/innovators-club",
+  "https://elise-ai-v3-7ffb9f5ea1acd5af317df8c7a1e.webflow.io/innovators-club",
   "http://localhost:3000",
   "http://localhost:5173",
 ]);
