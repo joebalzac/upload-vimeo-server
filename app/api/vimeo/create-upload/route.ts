@@ -4,28 +4,42 @@ const VIMEO_TOKEN = process.env.VIMEO_TOKEN || "";
 const VIMEO_FOLDER_ID = process.env.VIMEO_FOLDER_ID || "";
 const DEFAULT_PRIVACY = process.env.VIMEO_DEFAULT_PRIVACY || "unlisted";
 
+// allowlist = host origins only (no paths)
 const ALLOWED_ORIGINS = new Set<string>([
-  "https://eliseai.com/innovators-club",
-  "https://elise-ai-v3-7ffb9f5ea1acd5af317df8c7a1e.webflow.io/innovators-club",
+  "https://eliseai.com",
+  "https://elise-ai-v3-7ffb9f5ea1acd5af317df8c7a1e.webflow.io",
   "http://localhost:3000",
   "http://localhost:5173",
 ]);
 
+function normalizeOrigin(origin: string | null) {
+  if (!origin) return null;
+  try {
+    // URL constructor will strip paths, query, hash
+    return new URL(origin).origin;
+  } catch {
+    return origin;
+  }
+}
+
 function corsHeaders(origin: string | null) {
+  const normalized = normalizeOrigin(origin);
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS, GET, PUT, PATCH",
+    // include TUS-related headers and common ones
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, Tus-Resumable, Upload-Offset, Upload-Length, Upload-Metadata, X-Requested-With",
     "Access-Control-Expose-Headers": "X-Debug-Blocked-Origin",
-    "Vary": "Origin",
+    Vary: "Origin",
   };
 
-  if (origin && ALLOWED_ORIGINS.has(origin)) {
-    headers["Access-Control-Allow-Origin"] = origin;
+  if (normalized && ALLOWED_ORIGINS.has(normalized)) {
+    headers["Access-Control-Allow-Origin"] = normalized;
+    // If you rely on credentials (cookies/authorization), uncomment next line:
+    // headers["Access-Control-Allow-Credentials"] = "true";
   } else if (!origin) {
-    // server-to-server / non-browser
     headers["Access-Control-Allow-Origin"] = "*";
   } else {
-    // browser origin not allowed
     headers["X-Debug-Blocked-Origin"] = origin;
   }
 
@@ -48,7 +62,8 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error: "Server not configured",
-        details: "Missing VIMEO_TOKEN or VIMEO_FOLDER_ID in environment variables",
+        details:
+          "Missing VIMEO_TOKEN or VIMEO_FOLDER_ID in environment variables",
       },
       { status: 500, headers },
     );
@@ -62,7 +77,10 @@ export async function POST(req: Request) {
   };
 
   if (!size || typeof size !== "number" || Number.isNaN(size) || size <= 0) {
-    return NextResponse.json({ error: "Missing/invalid size" }, { status: 400, headers });
+    return NextResponse.json(
+      { error: "Missing/invalid size" },
+      { status: 400, headers },
+    );
   }
 
   // 1. Create Vimeo video placeholder with tus upload
