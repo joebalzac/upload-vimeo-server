@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import crypto from "crypto";
+import { createPending } from "@/lib/uploadStore";
 
 const VIMEO_TOKEN = process.env.VIMEO_TOKEN || "";
 const VIMEO_FOLDER_ID = process.env.VIMEO_FOLDER_ID || "";
@@ -65,7 +67,7 @@ export async function POST(req: Request) {
         details:
           "Missing VIMEO_TOKEN or VIMEO_FOLDER_ID in environment variables",
       },
-      { status: 500, headers },
+      { status: 500, headers }
     );
   }
 
@@ -79,11 +81,11 @@ export async function POST(req: Request) {
   if (!size || typeof size !== "number" || Number.isNaN(size) || size <= 0) {
     return NextResponse.json(
       { error: "Missing/invalid size" },
-      { status: 400, headers },
+      { status: 400, headers }
     );
   }
 
-  // 1. Create Vimeo video placeholder with tus upload
+  // 1) Create Vimeo video placeholder with tus upload
   const createResp = await fetch("https://api.vimeo.com/me/videos", {
     method: "POST",
     headers: {
@@ -99,14 +101,14 @@ export async function POST(req: Request) {
   });
 
   if (!createResp.ok) {
-    const text = await createResp.text();
+    const text = await createResp.text().catch(() => "");
     return NextResponse.json(
       { error: "Failed to create Vimeo upload", details: text },
-      { status: createResp.status, headers },
+      { status: createResp.status, headers }
     );
   }
 
-  const created: any = await createResp.json();
+  const created: any = await createResp.json().catch(() => null);
   const uploadLink: string | undefined = created?.upload?.upload_link;
   const videoUri: string | undefined = created?.uri; // e.g. "/videos/123"
   const videoId = (videoUri || "").split("/").pop();
@@ -121,21 +123,49 @@ export async function POST(req: Request) {
           videoId: !!videoId,
         }),
       },
-      { status: 500, headers },
+      { status: 500, headers }
     );
   }
 
-  // 2. Best-effort: add video to folder (do not block upload if it fails)
-  const addToFolderResp = await fetch(
-    `https://api.vimeo.com/me/folders/${VIMEO_FOLDER_ID}/videos/${videoId}`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${VIMEO_TOKEN}`,
-        Accept: "application/vnd.vimeo.*+json;version=3.4",
-      },
-    },
-  );
+  // 2) Best-effort: add video to folder (do not block upload if it fails)
+  let folder_add_ok = false;
+  try {
+    const addToFolderResp = await fetch(
+      `https://api.vimeo.com/me/folders/${VIMEO_FOLDER_ID}/videos/${videoId}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${VIMEO_TOKEN}`,
+          Accept: "application/vnd.vimeo.*+json;version=3.4",
+        },
+      }
+    );
+    folder_add_ok = addToFolderResp.ok;
+  } catch (err) {
+    console.warn("[WARN] add-to-folder failed (non-blocking):", err);
+  }
+
+  // 3) Option C: create a pending token + store "pending upload" record
+  const pending_token = crypto.randomBytes(24).toString("hex");
+  const created_at = new Date().toISOString();
+
+  try {
+    await createPending({
+      pending_token,
+      video_id: String(videoId),
+      video_uri: String(videoUri),
+      video_url: `https://vimeo.com/${videoId}`,
+      status: "pending",
+      created_at,
+    });
+  } catch (err) {
+    // If storage fails, we still return upload link (so user isn't blocked),
+    // but Option C cleanup won't work for this upload.
+    console.warn(
+      "[WARN] createPending failed (Option C disabled for this upload):",
+      err
+    );
+  }
 
   return NextResponse.json(
     {
@@ -143,9 +173,12 @@ export async function POST(req: Request) {
       video_id: videoId,
       video_uri: videoUri,
       video_url: `https://vimeo.com/${videoId}`,
-      folder_add_ok: addToFolderResp.ok,
+      folder_add_ok,
       privacy: DEFAULT_PRIVACY,
+
+      // NEW
+      pending_token,
     },
-    { status: 200, headers },
+    { status: 200, headers }
   );
 }
