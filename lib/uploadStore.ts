@@ -1,87 +1,73 @@
+// lib/uploadStore.ts
 import { Redis } from "@upstash/redis";
-
-export type UploadStatus = "pending" | "confirmed" | "deleted";
-
-export type UploadRecord = {
-  pending_token: string;
-  video_id: string;
-  video_uri?: string;
-  video_url?: string;
-  status: UploadStatus;
-  created_at: string;
-  confirmed_at?: string;
-  deleted_at?: string;
-};
 
 const redis = Redis.fromEnv();
 
-// Keys:
-// pending:{token} -> UploadRecord
-// pending_by_time -> ZSET score=timestampMs member=token
+const TTL_SECONDS = Number(
+  process.env.UPLOAD_PENDING_TTL_SECONDS || 6 * 60 * 60
+); // 6h default
 
-export async function createPending(record: UploadRecord) {
-  const token = record.pending_token;
-  const ts = Date.parse(record.created_at) || Date.now();
-
-  await redis.set(`pending:${token}`, record);
-  await redis.zadd("pending_by_time", { score: ts, member: token });
+function pendingKey(token: string) {
+  return `vimeo:pending:${token}`;
 }
 
-export async function confirmByToken(
-  token: string,
-  video_id: string,
-  confirmed_at: string
-) {
-  const key = `pending:${token}`;
-  const rec = await redis.get<UploadRecord>(key);
+function confirmedKey(videoId: string) {
+  return `vimeo:confirmed:${videoId}`;
+}
 
-  if (!rec) return false;
-  if (rec.video_id !== video_id) return false;
+export type PendingRecord = {
+  video_id: string;
+  created_at: string;
+};
 
-  const updated: UploadRecord = {
-    ...rec,
-    status: "confirmed",
-    confirmed_at,
+export async function storePendingUpload(args: {
+  pending_token: string;
+  video_id: string;
+  created_at: string;
+}) {
+  const rec: PendingRecord = {
+    video_id: args.video_id,
+    created_at: args.created_at,
   };
 
-  await redis.set(key, updated);
-  // Remove from zset so cleanup won’t touch it
-  await redis.zrem("pending_by_time", token);
-
-  return true;
+  // Store pending mapping with TTL
+  await redis.set(pendingKey(args.pending_token), rec, { ex: TTL_SECONDS });
 }
 
-export async function listExpiredPending(cutoffISO: string, limit: number) {
-  const cutoffMs = Date.parse(cutoffISO);
-  if (!Number.isFinite(cutoffMs)) return [];
-
-  // tokens older than cutoff
-  const tokens = await redis.zrange("pending_by_time", "-inf", cutoffMs, {
-    byScore: true,
-    offset: 0,
-    count: limit,
-  });
-
-  if (!tokens?.length) return [];
-
-  const records = await Promise.all(
-    tokens.map((t) => redis.get<UploadRecord>(`pending:${t}`))
-  );
-
-  return records.filter(Boolean) as UploadRecord[];
+export async function readPendingUpload(pending_token: string) {
+  return await redis.get<PendingRecord>(pendingKey(pending_token));
 }
 
-export async function markDeleted(token: string, deleted_at: string) {
-  const key = `pending:${token}`;
-  const rec = await redis.get<UploadRecord>(key);
+export async function confirmPendingUpload(args: {
+  pending_token: string;
+  video_id: string;
+  confirmed_at: string;
+}) {
+  const key = pendingKey(args.pending_token);
+  const rec = await redis.get<PendingRecord>(key);
 
-  if (rec) {
-    await redis.set(key, {
-      ...rec,
-      status: "deleted",
-      deleted_at,
-    } satisfies UploadRecord);
+  // If token missing/expired, nothing to confirm (but we can still consider it confirmed by video id)
+  if (!rec) {
+    // Mark confirmed anyway to prevent deletion by other mechanisms if you add them later
+    await redis.set(
+      confirmedKey(args.video_id),
+      { confirmed_at: args.confirmed_at },
+      { ex: 30 * 24 * 60 * 60 }
+    ); // 30d
+    return { ok: false, reason: "pending_token_not_found" as const };
   }
 
-  await redis.zrem("pending_by_time", token);
+  if (rec.video_id !== args.video_id) {
+    return { ok: false, reason: "video_id_mismatch" as const };
+  }
+
+  // Mark confirmed and delete pending token mapping
+  await redis.set(
+    confirmedKey(args.video_id),
+    { confirmed_at: args.confirmed_at },
+    { ex: 30 * 24 * 60 * 60 }
+  ); // 30d
+  await redis.del(key);
+
+  return { ok: true };
 }
