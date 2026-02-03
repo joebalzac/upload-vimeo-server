@@ -7,15 +7,14 @@ const DEFAULT_LIMIT = 25;
 
 export async function OPTIONS(req: Request) {
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, x-cleanup-secret",
+    "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Origin": "*",
   };
   return new NextResponse(null, { status: 204, headers });
 }
 
 function pickListFn(store: any) {
-  // Try several plausible exported names for retrieving expired/pending records
   const candidates = [
     "listExpiredPending",
     "listExpired",
@@ -34,7 +33,6 @@ function pickListFn(store: any) {
 }
 
 function pickMarkDeletedFn(store: any) {
-  // Try several plausible exported names for marking a pending token deleted
   const candidates = [
     "markDeleted",
     "markPendingDeleted",
@@ -50,16 +48,15 @@ function pickMarkDeletedFn(store: any) {
 }
 
 export async function POST(req: Request) {
-  // simple secret header protection (optional)
+  // ✅ Vercel cron uses Authorization: Bearer <CRON_SECRET>
   const cronSecret = process.env.CRON_SECRET;
-  const auth = req.headers.get("authorization");
+  const auth = req.headers.get("authorization") || "";
 
   if (cronSecret && auth !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    // dynamic import so we don't fail at compile time if named exports differ
     const storeModule = await import("@/lib/uploadStore").catch((err) => {
       throw new Error(
         `Failed to import uploadStore: ${String(err?.message || err)}`
@@ -75,7 +72,7 @@ export async function POST(req: Request) {
         {
           error: "uploadStore API mismatch",
           message:
-            "Could not find expected functions in @/lib/uploadStore. Expected a listing function (examples: listExpiredPending, listExpired, getExpiredPending) and a mark-delete function (examples: markDeleted, markPendingDeleted).",
+            "Could not find expected functions in @/lib/uploadStore. Expected a listing function and a mark-delete function.",
           availableExports: available,
         },
         { status: 500 }
@@ -102,8 +99,6 @@ export async function POST(req: Request) {
     const cutoffMs = Date.now() - hours * 60 * 60 * 1000;
     const cutoffISO = new Date(cutoffMs).toISOString();
 
-    // call the store's listing function. Try to pass (cutoffISO, limit) but
-    // if the function expects different params it may ignore extras.
     const pending: Array<any> = await listFn(cutoffISO, limit);
 
     if (!Array.isArray(pending)) {
@@ -119,7 +114,6 @@ export async function POST(req: Request) {
     const results: Array<any> = [];
     let deletedCount = 0;
 
-    // process sequentially (safe) — can be batched/concurrent later if desired
     for (const rec of pending) {
       const item: any = {
         pending_token: rec.pending_token ?? rec.token ?? rec.id ?? null,
@@ -135,7 +129,6 @@ export async function POST(req: Request) {
       }
 
       try {
-        // attempt delete on Vimeo (ignore failures but record)
         try {
           await vimeoDeleteVideo(String(item.video_id));
           item.deleted_on_vimeo = true;
@@ -145,22 +138,17 @@ export async function POST(req: Request) {
           item.vimeo_error = String(err?.message || err);
         }
 
-        // mark deleted in store (ensure we don't retry)
         try {
-          // call mark function with common signatures:
-          // markDeleted(pending_token, deletedAt) OR markDeleted({ pending_token, deleted_at })
           const deletedAt = new Date().toISOString();
-          const res =
-            // try (token, deletedAt)
-            await markFn(item.pending_token, deletedAt).catch(
-              async (err: any) => {
-                // try ({ pending_token, deleted_at })
-                return await markFn({
-                  pending_token: item.pending_token,
-                  deleted_at: deletedAt,
-                });
-              }
-            );
+          const res = await markFn(item.pending_token, deletedAt).catch(
+            async () => {
+              return await markFn({
+                pending_token: item.pending_token,
+                deleted_at: deletedAt,
+              });
+            }
+          );
+
           item.mark_result = typeof res === "undefined" ? "ok" : res;
         } catch (err: any) {
           item.mark_error = String(err?.message || err);
@@ -182,17 +170,17 @@ export async function POST(req: Request) {
         deleted: deletedCount,
         results,
       },
-      {
-        status: 200,
-        headers: { "Access-Control-Allow-Origin": "*" },
-      }
+      { status: 200, headers: { "Access-Control-Allow-Origin": "*" } }
     );
   } catch (err: any) {
     return NextResponse.json(
-      {
-        error: String(err?.message || err),
-      },
+      { error: String(err?.message || err) },
       { status: 500 }
     );
   }
+}
+
+// ✅ REQUIRED for Vercel Cron (GET)
+export async function GET(req: Request) {
+  return POST(req);
 }
