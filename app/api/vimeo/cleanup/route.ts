@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { vimeoDeleteVideo } from "@/lib/vimeo";
 
-// Important for cron/logging: prevents cached responses
+// Important for cron/logging: prevents cached responses in Vercel
 export const dynamic = "force-dynamic";
 
 const DEFAULT_HOURS = 24;
