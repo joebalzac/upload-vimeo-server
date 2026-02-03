@@ -83,26 +83,36 @@ async function handler(req: Request) {
   }
 
   const url = new URL(req.url);
-  const hours = Number(url.searchParams.get("hours") || DEFAULT_HOURS);
+
   const limit = Number(url.searchParams.get("limit") || DEFAULT_LIMIT);
 
-  if (Number.isNaN(hours) || hours <= 0) {
-    return NextResponse.json({ error: "Invalid hours" }, { status: 400 });
+  // NEW: minutes takes precedence; hours is fallback
+  const minutesParam = url.searchParams.get("minutes");
+  const hoursParam = url.searchParams.get("hours");
+
+  let minutes: number;
+  if (minutesParam != null) {
+    minutes = Number(minutesParam);
+  } else if (hoursParam != null) {
+    minutes = Number(hoursParam) * 60;
+  } else {
+    minutes = DEFAULT_HOURS * 60;
+  }
+
+  if (Number.isNaN(minutes) || minutes <= 0) {
+    return NextResponse.json(
+      { error: "Invalid minutes/hours" },
+      { status: 400 }
+    );
   }
   if (Number.isNaN(limit) || limit <= 0) {
     return NextResponse.json({ error: "Invalid limit" }, { status: 400 });
   }
 
-  const cutoffMs = Date.now() - hours * 60 * 60 * 1000;
+  const cutoffMs = Date.now() - minutes * 60 * 1000;
   const cutoffISO = new Date(cutoffMs).toISOString();
 
   const pending: any[] = await listFn(cutoffISO, limit);
-  if (!Array.isArray(pending)) {
-    return NextResponse.json(
-      { error: "uploadStore list returned non-array", returned: typeof pending },
-      { status: 500 }
-    );
-  }
 
   const results: any[] = [];
   let deletedCount = 0;
@@ -152,7 +162,7 @@ async function handler(req: Request) {
     {
       ok: true,
       cutoffISO,
-      requested_hours: hours,
+      requested_minutes: minutes,
       requested_limit: limit,
       found: pending.length,
       deleted: deletedCount,
