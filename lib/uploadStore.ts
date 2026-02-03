@@ -19,23 +19,16 @@ export type PendingRecord = {
   created_at: string;
 };
 
-// ✅ store + index
 export async function storePendingUpload(args: {
   pending_token: string;
   video_id: string;
   created_at: string;
 }) {
-  const rec: PendingRecord = {
-    video_id: args.video_id,
-    created_at: args.created_at,
-  };
+  const rec = { video_id: args.video_id, created_at: args.created_at };
 
-  const createdMs = Date.parse(args.created_at);
-
-  // Store pending mapping with TTL
   await redis.set(pendingKey(args.pending_token), rec, { ex: TTL_SECONDS });
 
-  // Index token by created time (ms)
+  const createdMs = Date.parse(args.created_at);
   if (!Number.isNaN(createdMs)) {
     await redis.zadd(PENDING_INDEX_KEY, {
       score: createdMs,
@@ -50,10 +43,10 @@ export async function readPendingUpload(pending_token: string) {
 
 // ✅ list “expired pending” for cleanup route (matches your handler’s expected call shape)
 export async function listExpiredPending(cutoffISO: string, limit: number) {
+  const PENDING_INDEX_KEY = "vimeo:pending:index";
   const cutoffMs = Date.parse(cutoffISO);
-  const max = Number.isNaN(cutoffMs) ? Date.now() : cutoffMs;
 
-  const tokens = await redis.zrange(PENDING_INDEX_KEY, 0, max, {
+  const tokens = await redis.zrange(PENDING_INDEX_KEY, 0, cutoffMs, {
     byScore: true,
     offset: 0,
     count: limit,
@@ -71,14 +64,13 @@ export async function listExpiredPending(cutoffISO: string, limit: number) {
       await redis.zrem(PENDING_INDEX_KEY, token);
       continue;
     }
-
-    const isConfirmed = await redis.get(confirmedKey(rec.video_id));
-    if (isConfirmed) {
+    // if confirmed, clean up
+    const confirmed = await redis.get(confirmedKey(rec.video_id));
+    if (confirmed) {
       await redis.del(pendingKey(token));
       await redis.zrem(PENDING_INDEX_KEY, token);
       continue;
     }
-
     out.push({
       pending_token: token,
       video_id: rec.video_id,
@@ -89,9 +81,10 @@ export async function listExpiredPending(cutoffISO: string, limit: number) {
   return out;
 }
 
-// ✅ “mark deleted” for cleanup route
+// “mark deleted” for cleanup route
 // called as markFn(pending_token, deletedAtISO) in your route
 export async function markDeleted(pending_token: string, _deleted_at: string) {
+  const PENDING_INDEX_KEY = "vimeo:pending:index";
   await redis.del(pendingKey(pending_token));
   await redis.zrem(PENDING_INDEX_KEY, pending_token);
   return { ok: true };
