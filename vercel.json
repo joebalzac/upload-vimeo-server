@@ -1,0 +1,9 @@
+{
+    "crons": [
+      {
+        "path": "/api/vimeo/cleanup?hours=0.083&limit=25",
+        "schedule": "*/5 * * * *"
+      }
+    ]
+  }
+  
