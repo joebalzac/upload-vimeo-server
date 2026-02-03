@@ -51,10 +51,10 @@ function pickMarkDeletedFn(store: any) {
 
 export async function POST(req: Request) {
   // simple secret header protection (optional)
-  const secret = process.env.CLEANUP_SECRET;
-  const provided = req.headers.get("x-cleanup-secret");
+  const cronSecret = process.env.CRON_SECRET;
+  const auth = req.headers.get("authorization");
 
-  if (secret && provided !== secret) {
+  if (cronSecret && auth !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
