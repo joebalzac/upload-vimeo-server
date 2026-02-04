@@ -1,6 +1,7 @@
 // app/api/vimeo/cleanup/route.ts
 import { NextResponse } from "next/server";
 import { vimeoDeleteVideo, vimeoWhoAmI } from "@/lib/vimeo";
+import { listExpiredPending, markDeleted } from "@/lib/uploadStore";
 
 // Important for cron/logging: prevents cached responses in Vercel
 export const dynamic = "force-dynamic";
@@ -8,55 +9,33 @@ export const dynamic = "force-dynamic";
 const DEFAULT_HOURS = 24;
 const DEFAULT_LIMIT = 25;
 
-export async function OPTIONS() {
-  const headers: Record<string, string> = {
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Origin": "*",
   };
-  return new NextResponse(null, { status: 204, headers });
 }
 
-function pickListFn(store: any) {
-  const candidates = [
-    "listExpiredPending",
-    "listExpired",
-    "listPending",
-    "getExpiredPending",
-    "getExpired",
-    "findExpiredPending",
-    "getPendingUploadsOlderThan",
-    "listPendingUploads",
-    "listPendingByCutoff",
-  ];
-  for (const name of candidates) {
-    if (typeof store[name] === "function") return store[name].bind(store);
-  }
-  return null;
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: corsHeaders() });
 }
 
-function pickMarkDeletedFn(store: any) {
-  const candidates = [
-    "markDeleted",
-    "markPendingDeleted",
-    "setDeleted",
-    "deletePendingRecord",
-    "markAsDeleted",
-    "confirmDeletion",
-  ];
-  for (const name of candidates) {
-    if (typeof store[name] === "function") return store[name].bind(store);
-  }
-  return null;
+function parseBearer(authHeader: string | null) {
+  if (!authHeader) return "";
+  return authHeader.replace(/^Bearer\s+/i, "").trim();
 }
 
 async function handler(req: Request) {
   // Vercel Cron: Authorization: Bearer <CRON_SECRET>
   const cronSecret = process.env.CRON_SECRET;
-  const auth = req.headers.get("authorization") || "";
+  const token = parseBearer(req.headers.get("authorization"));
 
-  if (cronSecret && auth !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (cronSecret && token !== cronSecret) {
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders() }
+    );
   }
 
   // (Optional) TEMP DEBUG: verify which Vimeo account token belongs to (no token printed)
@@ -65,29 +44,6 @@ async function handler(req: Request) {
     console.log("[cleanup] vimeo /me status:", who.status);
   } catch (e: any) {
     console.log("[cleanup] vimeo /me failed:", String(e?.message || e));
-  }
-
-  // Import uploadStore dynamically to avoid TS/export-name mismatch at build time
-  const storeModule = await import("@/lib/uploadStore").catch((err) => {
-    throw new Error(
-      `Failed to import uploadStore: ${String(err?.message || err)}`
-    );
-  });
-
-  const listFn = pickListFn(storeModule);
-  const markFn = pickMarkDeletedFn(storeModule);
-
-  if (!listFn || !markFn) {
-    const available = Object.keys(storeModule).join(", ") || "<no-exports>";
-    return NextResponse.json(
-      {
-        error: "uploadStore API mismatch",
-        message:
-          "Could not find expected functions in @/lib/uploadStore (list + markDeleted).",
-        availableExports: available,
-      },
-      { status: 500 }
-    );
   }
 
   const url = new URL(req.url);
@@ -106,24 +62,27 @@ async function handler(req: Request) {
   if (Number.isNaN(minutes) || minutes <= 0) {
     return NextResponse.json(
       { error: "Invalid minutes/hours" },
-      { status: 400 }
+      { status: 400, headers: corsHeaders() }
     );
   }
   if (Number.isNaN(limit) || limit <= 0) {
-    return NextResponse.json({ error: "Invalid limit" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid limit" },
+      { status: 400, headers: corsHeaders() }
+    );
   }
 
   const cutoffMs = Date.now() - minutes * 60 * 1000;
   const cutoffISO = new Date(cutoffMs).toISOString();
 
-  const pending: any[] = await listFn(cutoffISO, limit);
+  const pending: any[] = await listExpiredPending(cutoffISO, limit);
   if (!Array.isArray(pending)) {
     return NextResponse.json(
       {
         error: "uploadStore list returned non-array",
         returned: typeof pending,
       },
-      { status: 500 }
+      { status: 500, headers: corsHeaders() }
     );
   }
 
@@ -160,9 +119,7 @@ async function handler(req: Request) {
       // 2) Only mark deleted in store if Vimeo delete succeeded
       try {
         const deletedAt = new Date().toISOString();
-        const res = await markFn(pending_token, deletedAt).catch(async () => {
-          return await markFn({ pending_token, deleted_at: deletedAt });
-        });
+        const res = await markDeleted(pending_token, deletedAt);
         item.mark_result = typeof res === "undefined" ? "ok" : res;
       } catch (err: any) {
         item.mark_error = String(err?.message || err);
@@ -196,7 +153,7 @@ async function handler(req: Request) {
       deleted: deletedCount,
       results,
     },
-    { status: 200, headers: { "Access-Control-Allow-Origin": "*" } }
+    { status: 200, headers: corsHeaders() }
   );
 }
 
@@ -207,7 +164,7 @@ export async function POST(req: Request) {
   } catch (err: any) {
     return NextResponse.json(
       { error: String(err?.message || err) },
-      { status: 500 }
+      { status: 500, headers: corsHeaders() }
     );
   }
 }

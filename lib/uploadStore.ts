@@ -4,7 +4,9 @@ import { Redis } from "@upstash/redis";
 const redis = Redis.fromEnv();
 
 // How long a pending token record should live (key TTL). Cleanup timing is controlled by cron.
-const TTL_SECONDS = Number(process.env.UPLOAD_PENDING_TTL_SECONDS || 6 * 60 * 60); // 6h default
+const TTL_SECONDS = Number(
+  process.env.UPLOAD_PENDING_TTL_SECONDS || 6 * 60 * 60
+); // 6h default
 
 const INDEX_KEY = "vimeo:pending:index";
 
@@ -87,16 +89,11 @@ export async function listExpiredPending(cutoffISO: string, limit: number) {
   if (!Number.isFinite(cutoffMs)) return [];
 
   // tokens older than cutoff (by score)
-  const raw = await redis.zrange(
-    INDEX_KEY,
-    "-inf",
-    cutoffMs,
-    {
-      byScore: true,
-      offset: 0,
-      count: limit,
-    } as any
-  );
+  const raw = await redis.zrange(INDEX_KEY, "-inf", cutoffMs, {
+    byScore: true,
+    offset: 0,
+    count: limit,
+  } as any);
 
   const tokens = (raw as unknown[]).map((t) => String(t));
   if (!tokens.length) return [];
