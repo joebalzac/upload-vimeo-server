@@ -1,15 +1,14 @@
 import { Redis } from "@upstash/redis";
-
 const redis = Redis.fromEnv();
 
-const TTL_SECONDS = Number(
-  process.env.UPLOAD_PENDING_TTL_SECONDS || 6 * 60 * 60
-); // 6h default
-const PENDING_INDEX_KEY = "vimeo:pending:index";
+const TTL_SECONDS = Number(process.env.UPLOAD_PENDING_TTL_SECONDS || 6 * 60); // set to 300 for 5 min tests
+
+const INDEX_KEY = "vimeo:pending:index";
 
 function pendingKey(token: string) {
   return `vimeo:pending:${token}`;
 }
+
 function confirmedKey(videoId: string) {
   return `vimeo:confirmed:${videoId}`;
 }
@@ -24,70 +23,48 @@ export async function storePendingUpload(args: {
   video_id: string;
   created_at: string;
 }) {
-  const rec = { video_id: args.video_id, created_at: args.created_at };
+  const rec: PendingRecord = {
+    video_id: args.video_id,
+    created_at: args.created_at,
+  };
 
+  // 1) store record (TTL)
   await redis.set(pendingKey(args.pending_token), rec, { ex: TTL_SECONDS });
 
-  const createdMs = Date.parse(args.created_at);
-  if (!Number.isNaN(createdMs)) {
-    await redis.zadd(PENDING_INDEX_KEY, {
-      score: createdMs,
-      member: args.pending_token,
-    });
-  }
+  // 2) index by time for cleanup
+  const score = Date.parse(args.created_at) || Date.now();
+  await redis.zadd(INDEX_KEY, { score, member: args.pending_token });
 }
 
 export async function readPendingUpload(pending_token: string) {
   return await redis.get<PendingRecord>(pendingKey(pending_token));
 }
 
-// ✅ list “expired pending” for cleanup route (matches your handler’s expected call shape)
 export async function listExpiredPending(cutoffISO: string, limit: number) {
-  const PENDING_INDEX_KEY = "vimeo:pending:index";
   const cutoffMs = Date.parse(cutoffISO);
+  if (!Number.isFinite(cutoffMs)) return [];
 
-  const tokens = await redis.zrange(PENDING_INDEX_KEY, 0, cutoffMs, {
+  const raw = await redis.zrange(INDEX_KEY, 0, cutoffMs, {
     byScore: true,
     offset: 0,
     count: limit,
-  });
+  } as any);
 
-  const out: Array<{
-    pending_token: string;
-    video_id: string;
-    created_at: string;
-  }> = [];
+  const tokens = (raw as unknown[]).map((t) => String(t));
+  if (tokens.length === 0) return [];
 
-  for (const token of tokens as string[]) {
-    const rec = await redis.get<PendingRecord>(pendingKey(token));
-    if (!rec?.video_id) {
-      await redis.zrem(PENDING_INDEX_KEY, token);
-      continue;
-    }
-    // if confirmed, clean up
-    const confirmed = await redis.get(confirmedKey(rec.video_id));
-    if (confirmed) {
-      await redis.del(pendingKey(token));
-      await redis.zrem(PENDING_INDEX_KEY, token);
-      continue;
-    }
-    out.push({
-      pending_token: token,
-      video_id: rec.video_id,
-      created_at: rec.created_at,
-    });
-  }
+  const records = await Promise.all(
+    tokens.map((token) => redis.get<PendingRecord>(pendingKey(token)))
+  );
 
-  return out;
+  return records
+    .map((rec, i) => (rec ? { ...rec, pending_token: tokens[i] } : null))
+    .filter(Boolean) as Array<PendingRecord & { pending_token: string }>;
 }
 
-// “mark deleted” for cleanup route
-// called as markFn(pending_token, deletedAtISO) in your route
-export async function markDeleted(pending_token: string, _deleted_at: string) {
-  const PENDING_INDEX_KEY = "vimeo:pending:index";
+export async function markDeleted(pending_token: string, deleted_at: string) {
+  await redis.zrem(INDEX_KEY, pending_token);
   await redis.del(pendingKey(pending_token));
-  await redis.zrem(PENDING_INDEX_KEY, pending_token);
-  return { ok: true };
 }
 
 export async function confirmPendingUpload(args: {
@@ -98,28 +75,20 @@ export async function confirmPendingUpload(args: {
   const key = pendingKey(args.pending_token);
   const rec = await redis.get<PendingRecord>(key);
 
-  if (!rec) {
-    await redis.set(
-      confirmedKey(args.video_id),
-      { confirmed_at: args.confirmed_at },
-      { ex: 30 * 24 * 60 * 60 }
-    );
-    return { ok: false, reason: "pending_token_not_found" as const };
-  }
-
-  if (rec.video_id !== args.video_id) {
-    return { ok: false, reason: "video_id_mismatch" as const };
-  }
-
+  // mark confirmed by video id
   await redis.set(
     confirmedKey(args.video_id),
     { confirmed_at: args.confirmed_at },
     { ex: 30 * 24 * 60 * 60 }
   );
 
-  // delete pending mapping + remove from index
+  // remove pending
   await redis.del(key);
-  await redis.zrem(PENDING_INDEX_KEY, args.pending_token);
+  await redis.zrem(INDEX_KEY, args.pending_token);
+
+  if (!rec) return { ok: false, reason: "pending_token_not_found" as const };
+  if (rec.video_id !== args.video_id)
+    return { ok: false, reason: "video_id_mismatch" as const };
 
   return { ok: true };
 }
