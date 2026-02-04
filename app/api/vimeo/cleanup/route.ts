@@ -113,12 +113,23 @@ async function handler(req: Request) {
   const cutoffISO = new Date(cutoffMs).toISOString();
 
   const pending: any[] = await listFn(cutoffISO, limit);
+  if (!Array.isArray(pending)) {
+    return NextResponse.json(
+      {
+        error: "uploadStore list returned non-array",
+        returned: typeof pending,
+      },
+      { status: 500 }
+    );
+  }
 
   const results: any[] = [];
   let deletedCount = 0;
 
   for (const rec of pending) {
-    const pending_token = rec.pending_token ?? rec.token ?? rec.id ?? null;
+    const pending_token =
+      rec.pending_token ?? rec.pendingToken ?? rec.token ?? rec.id ?? null;
+
     const video_id =
       rec.video_id ?? rec.videoId ?? rec.video_id_str ?? rec.video ?? null;
 
@@ -134,9 +145,11 @@ async function handler(req: Request) {
       continue;
     }
 
-    // 1) Delete on Vimeo (best-effort)
+    // 1) Delete on Vimeo
+    let vimeoDeleted = false;
     try {
       await vimeoDeleteVideo(String(video_id));
+      vimeoDeleted = true;
       item.deleted_on_vimeo = true;
       deletedCount++;
     } catch (err: any) {
@@ -144,8 +157,8 @@ async function handler(req: Request) {
       item.vimeo_error = String(err?.message || err);
     }
 
-    // 2) Mark deleted in store ONLY if Vimeo deletion succeeded
-    if (item.deleted_on_vimeo) {
+    // 2) Only mark deleted in store if Vimeo delete succeeded
+    if (vimeoDeleted) {
       try {
         const deletedAt = new Date().toISOString();
         const res = await markFn(pending_token, deletedAt).catch(async () => {
