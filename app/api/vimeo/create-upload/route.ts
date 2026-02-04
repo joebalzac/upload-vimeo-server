@@ -68,12 +68,13 @@ export async function POST(req: Request) {
   }
 
   try {
+    // 1) Create Vimeo upload placeholder (server-side)
     const created = await vimeoCreateTusUpload({
       size,
       name: name || filename || "User submission",
     });
 
-    // best-effort folder add
+    // 2) Best-effort: add to folder/project
     let folder_add_ok = false;
     if (VIMEO_FOLDER_ID) {
       folder_add_ok = await vimeoAddToFolder({
@@ -82,7 +83,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // Option-C: mint token & store pending mapping in Redis
+    // 3) Store pending record for cleanup
     const pending_token = crypto.randomBytes(24).toString("hex");
     await storePendingUpload({
       pending_token,
@@ -91,19 +92,12 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json(
-      {
-        ...created,
-        folder_add_ok,
-        pending_token,
-      },
+      { ...created, folder_add_ok, pending_token },
       { status: 200, headers }
     );
   } catch (err: any) {
     return NextResponse.json(
-      {
-        error: "Failed to create Vimeo upload",
-        details: String(err?.message || err),
-      },
+      { error: "Failed to create Vimeo upload", details: String(err?.message || err) },
       { status: 500, headers }
     );
   }
