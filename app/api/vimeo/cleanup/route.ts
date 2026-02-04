@@ -177,11 +177,13 @@ async function handler(req: Request) {
   }
 
   // helpful log for Vercel cron debugging
-  console.log("[cleanup] summary", {
+  console.log("[cleanup] run", {
     cutoffISO,
     requested_minutes: minutes,
+    limit,
     found: pending.length,
     deleted: deletedCount,
+    sample: results.slice(0, 3),
   });
 
   return NextResponse.json(
