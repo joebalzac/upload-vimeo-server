@@ -50,23 +50,24 @@ export async function vimeoCreateTusUpload(args: {
   };
 }
 
-export async function vimeoAddToFolder({ folderId, videoId }: { folderId: string; videoId: string; }) {
-  // “Folder” in Vimeo UI is usually a Project in API
+export async function vimeoAddToFolder(args: {
+  folderId: string; // (project_id in API terms)
+  videoId: string;
+}) {
   const resp = await fetch(
-    `https://api.vimeo.com/me/projects/${encodeURIComponent(
-      folderId
-    )}/videos/${encodeURIComponent(videoId)}`,
-    { method: "PUT", headers: vimeoHeaders() }
+    `https://api.vimeo.com/me/projects/${args.folderId}/videos/${encodeURIComponent(args.videoId)}`,
+    {
+      method: "PUT",
+      headers: vimeoHeaders(),
+    }
   );
 
   if (!resp.ok) {
     const txt = await resp.text().catch(() => "");
-    console.error("[vimeoAddToFolder] failed", resp.status, txt.slice(0, 1000));
+    console.error("Vimeo add-to-folder failed", resp.status, txt);
   }
-
   return resp.ok;
 }
-
 
 export async function vimeoDeleteVideo(videoId: string) {
   const resp = await fetch(
