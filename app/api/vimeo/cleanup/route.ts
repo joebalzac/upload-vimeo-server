@@ -144,15 +144,19 @@ async function handler(req: Request) {
       item.vimeo_error = String(err?.message || err);
     }
 
-    // 2) Mark deleted in store (so we don't retry forever)
-    try {
-      const deletedAt = new Date().toISOString();
-      const res = await markFn(pending_token, deletedAt).catch(async () => {
-        return await markFn({ pending_token, deleted_at: deletedAt });
-      });
-      item.mark_result = typeof res === "undefined" ? "ok" : res;
-    } catch (err: any) {
-      item.mark_error = String(err?.message || err);
+    // 2) Mark deleted in store ONLY if Vimeo deletion succeeded
+    if (item.deleted_on_vimeo) {
+      try {
+        const deletedAt = new Date().toISOString();
+        const res = await markFn(pending_token, deletedAt).catch(async () => {
+          return await markFn({ pending_token, deleted_at: deletedAt });
+        });
+        item.mark_result = typeof res === "undefined" ? "ok" : res;
+      } catch (err: any) {
+        item.mark_error = String(err?.message || err);
+      }
+    } else {
+      item.mark_result = "skipped_mark_deleted_due_to_vimeo_failure";
     }
 
     results.push(item);
