@@ -1,6 +1,6 @@
-// File: app/api/vimeo/cleanup/route.ts
+// app/api/vimeo/cleanup/route.ts
 import { NextResponse } from "next/server";
-import { vimeoDeleteVideo } from "@/lib/vimeo";
+import { vimeoDeleteVideo, vimeoWhoAmI } from "@/lib/vimeo";
 
 // Important for cron/logging: prevents cached responses in Vercel
 export const dynamic = "force-dynamic";
@@ -59,6 +59,14 @@ async function handler(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // (Optional) TEMP DEBUG: verify which Vimeo account token belongs to (no token printed)
+  try {
+    const who = await vimeoWhoAmI();
+    console.log("[cleanup] vimeo /me status:", who.status);
+  } catch (e: any) {
+    console.log("[cleanup] vimeo /me failed:", String(e?.message || e));
+  }
+
   // Import uploadStore dynamically to avoid TS/export-name mismatch at build time
   const storeModule = await import("@/lib/uploadStore").catch((err) => {
     throw new Error(
@@ -86,18 +94,14 @@ async function handler(req: Request) {
 
   const limit = Number(url.searchParams.get("limit") || DEFAULT_LIMIT);
 
-  // NEW: minutes takes precedence; hours is fallback
+  // minutes takes precedence; hours is fallback
   const minutesParam = url.searchParams.get("minutes");
   const hoursParam = url.searchParams.get("hours");
 
   let minutes: number;
-  if (minutesParam != null) {
-    minutes = Number(minutesParam);
-  } else if (hoursParam != null) {
-    minutes = Number(hoursParam) * 60;
-  } else {
-    minutes = DEFAULT_HOURS * 60;
-  }
+  if (minutesParam != null) minutes = Number(minutesParam);
+  else if (hoursParam != null) minutes = Number(hoursParam) * 60;
+  else minutes = DEFAULT_HOURS * 60;
 
   if (Number.isNaN(minutes) || minutes <= 0) {
     return NextResponse.json(
@@ -145,32 +149,40 @@ async function handler(req: Request) {
       continue;
     }
 
-    // 1) Delete on Vimeo
-    let vimeoDeleted = false;
+    // 1) Delete on Vimeo (record status/body so prod debugging is easy)
+    const del = await vimeoDeleteVideo(String(video_id));
+    item.vimeo_status = del.status;
 
-    try {
-      await vimeoDeleteVideo(String(video_id));
-      vimeoDeleted = true;
+    if (del.ok) {
       item.deleted_on_vimeo = true;
       deletedCount++;
-    } catch (err: any) {
-      item.deleted_on_vimeo = false;
-      item.vimeo_error = String(err?.message || err);
-    }
 
-    if (vimeoDeleted) {
-      // only now do we remove from Redis / mark deleted
-      const deletedAt = new Date().toISOString();
-      const res = await markFn(pending_token, deletedAt).catch(async () => {
-        return await markFn({ pending_token, deleted_at: deletedAt });
-      });
-      item.mark_result = typeof res === "undefined" ? "ok" : res;
+      // 2) Only mark deleted in store if Vimeo delete succeeded
+      try {
+        const deletedAt = new Date().toISOString();
+        const res = await markFn(pending_token, deletedAt).catch(async () => {
+          return await markFn({ pending_token, deleted_at: deletedAt });
+        });
+        item.mark_result = typeof res === "undefined" ? "ok" : res;
+      } catch (err: any) {
+        item.mark_error = String(err?.message || err);
+      }
     } else {
+      item.deleted_on_vimeo = false;
+      item.vimeo_error = del.body || `status ${del.status}`;
       item.mark_result = "skipped_mark_deleted_due_to_vimeo_failure";
     }
 
     results.push(item);
   }
+
+  // helpful log for Vercel cron debugging
+  console.log("[cleanup] summary", {
+    cutoffISO,
+    requested_minutes: minutes,
+    found: pending.length,
+    deleted: deletedCount,
+  });
 
   return NextResponse.json(
     {

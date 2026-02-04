@@ -51,36 +51,46 @@ export async function vimeoCreateTusUpload(args: {
 }
 
 export async function vimeoAddToFolder(args: {
-  folderId: string; // (project_id in API terms)
+  folderId: string;
   videoId: string;
 }) {
   const resp = await fetch(
-    `https://api.vimeo.com/me/projects/${args.folderId}/videos/${encodeURIComponent(args.videoId)}`,
-    {
-      method: "PUT",
-      headers: vimeoHeaders(),
-    }
+    `https://api.vimeo.com/me/folders/${args.folderId}/videos/${encodeURIComponent(args.videoId)}`,
+    { method: "PUT", headers: vimeoHeaders() }
   );
-
-  if (!resp.ok) {
-    const txt = await resp.text().catch(() => "");
-    console.error("Vimeo add-to-folder failed", resp.status, txt);
-  }
   return resp.ok;
 }
 
+/**
+ * Delete a Vimeo video.
+ * Returns status/body so callers can log/decide whether to mark deleted in Redis.
+ * Treats 204 (deleted) and 404 (already gone) as success.
+ */
 export async function vimeoDeleteVideo(videoId: string) {
   const resp = await fetch(
     `https://api.vimeo.com/videos/${encodeURIComponent(videoId)}`,
-    {
-      method: "DELETE",
-      headers: vimeoHeaders(),
-    }
+    { method: "DELETE", headers: vimeoHeaders() }
   );
 
-  // Vimeo delete returns 204 typically. 404 is fine if already gone.
-  if (!resp.ok && resp.status !== 404) {
-    const txt = await resp.text().catch(() => "");
-    throw new Error(`Vimeo delete failed ${resp.status}: ${txt}`);
+  const body = await resp.text().catch(() => "");
+
+  if (resp.status === 204 || resp.status === 404) {
+    return { ok: true, status: resp.status, body };
   }
+
+  return { ok: false, status: resp.status, body };
+}
+
+/**
+ * Debug helper: tells you which Vimeo user/account this token belongs to.
+ * Safe to log status + a small snippet of body.
+ */
+export async function vimeoWhoAmI() {
+  const resp = await fetch("https://api.vimeo.com/me", {
+    method: "GET",
+    headers: vimeoHeaders(),
+  });
+
+  const body = await resp.text().catch(() => "");
+  return { ok: resp.ok, status: resp.status, body };
 }
