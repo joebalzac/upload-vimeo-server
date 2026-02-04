@@ -147,6 +147,7 @@ async function handler(req: Request) {
 
     // 1) Delete on Vimeo
     let vimeoDeleted = false;
+
     try {
       await vimeoDeleteVideo(String(video_id));
       vimeoDeleted = true;
@@ -157,17 +158,13 @@ async function handler(req: Request) {
       item.vimeo_error = String(err?.message || err);
     }
 
-    // 2) Only mark deleted in store if Vimeo delete succeeded
     if (vimeoDeleted) {
-      try {
-        const deletedAt = new Date().toISOString();
-        const res = await markFn(pending_token, deletedAt).catch(async () => {
-          return await markFn({ pending_token, deleted_at: deletedAt });
-        });
-        item.mark_result = typeof res === "undefined" ? "ok" : res;
-      } catch (err: any) {
-        item.mark_error = String(err?.message || err);
-      }
+      // only now do we remove from Redis / mark deleted
+      const deletedAt = new Date().toISOString();
+      const res = await markFn(pending_token, deletedAt).catch(async () => {
+        return await markFn({ pending_token, deleted_at: deletedAt });
+      });
+      item.mark_result = typeof res === "undefined" ? "ok" : res;
     } else {
       item.mark_result = "skipped_mark_deleted_due_to_vimeo_failure";
     }
