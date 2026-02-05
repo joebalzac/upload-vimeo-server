@@ -1,7 +1,11 @@
 // app/api/vimeo/cleanup/route.ts
 import { NextResponse } from "next/server";
 import { vimeoDeleteVideo, vimeoWhoAmI } from "@/lib/vimeo";
-import { listExpiredPending, markDeleted } from "@/lib/uploadStore";
+import {
+  isConfirmed,
+  listExpiredPending,
+  markDeleted,
+} from "@/lib/uploadStore";
 
 // Important for cron/logging: prevents cached responses in Vercel
 export const dynamic = "force-dynamic";
@@ -108,6 +112,22 @@ async function handler(req: Request) {
       continue;
     }
 
+    // SAFETY: skip if upload was already confirmed (form submitted)
+    try {
+      const confirmed = await isConfirmed(String(video_id));
+      if (confirmed) {
+        item.skipped = "already_confirmed";
+        results.push(item);
+        continue;
+      }
+    } catch (err: any) {
+      console.log(
+        "[cleanup] isConfirmed check failed:",
+        String(err?.message || err)
+      );
+      // continue with deletion rather than failing the whole cron
+    }
+
     // 1) Delete on Vimeo (record status/body so prod debugging is easy)
     const del = await vimeoDeleteVideo(String(video_id));
     item.vimeo_status = del.status;
@@ -133,7 +153,6 @@ async function handler(req: Request) {
     results.push(item);
   }
 
-  // helpful log for Vercel cron debugging
   console.log("[cleanup] run", {
     cutoffISO,
     requested_minutes: minutes,
