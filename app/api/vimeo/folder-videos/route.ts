@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const VIMEO_TOKEN  = process.env.VIMEO_ACCESS_TOKEN!;
+const VIMEO_TOKEN  = process.env.VIMEO_TOKEN!;
 const FOLDER_ID   = process.env.VIMEO_FOLDER_ID!;
 
 const FIELDS = [
