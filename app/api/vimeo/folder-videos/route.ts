@@ -13,6 +13,7 @@ const FIELDS = [
   "created_time",
   "pictures",
   "embed",
+  "description",
 ].join(",");
 
 function corsHeaders() {
@@ -63,6 +64,8 @@ export async function GET(req: Request) {
   const raw = await res.json();
 
   // Normalise each video into the shape VimeoVideoGrid.tsx expects
+  console.log("[folder-videos] raw sample:", JSON.stringify(raw.data?.[0], null, 2));
+
   const videos = (raw.data ?? []).map((v: any) => {
     const id = String(v.uri).replace("/videos/", "");
 
@@ -80,7 +83,6 @@ export async function GET(req: Request) {
       thumbnail,
       embed_url:    `https://player.vimeo.com/video/${id}`,
       description:  v.description ?? "",
-      
     };
   });
 
