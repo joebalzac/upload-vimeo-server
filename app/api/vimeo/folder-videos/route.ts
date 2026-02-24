@@ -79,6 +79,8 @@ export async function GET(req: Request) {
       created_time: v.created_time ?? "",
       thumbnail,
       embed_url:    `https://player.vimeo.com/video/${id}`,
+      description:  v.description ?? "",
+      
     };
   });
 
